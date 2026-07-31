@@ -265,6 +265,84 @@ action space, `VecNormalize.load(path, venv)` with `venv.training = False`,
 normalize each observation before calling `model.predict(...,
 deterministic=True)`.
 
+### File reference (this repo)
+
+The `ros2_ws` port's files above live directly at this repo's root, not
+under `ros2_ws/src/cart_pole_gz_train/` (there is no `ros2_ws/` in this
+repo). All commands below need
+`PYTHONPATH=/usr/lib/python3/dist-packages` and `uv run` per the
+Environment setup section.
+
+- **`cart_pole_env.py`** — the root-project pattern (see section 1
+  above): single file, headless in-process training + out-of-process
+  GUI inference against the static, hand-authored `cart_pole.sdf` and
+  its wrench-driven `vehicle_green` model.
+  Run: `uv run python cart_pole_env.py`.
+- **`world_builder.py`** — the xacro→SDF pipeline
+  (`generate_training_world`): runs `xacro` + `gz sdf -p`, strips mesh
+  visuals/collisions down to primitives, drops `tip_link`, injects the
+  measured spawn pose, wraps the result in a full `<world>` with
+  physics/GUI plugins. Produces `cart_pole_train.sdf` (gitignored — a
+  build output, not a source file). **Currently broken in this repo** —
+  see the note below.
+- **`gz_scorer.py`** — `GzCartPoleScorer`, the joint-based in-process
+  Gazebo System (reads `cart_joint`/`pole_joint` position/velocity
+  straight from the ECM, no finite-difference estimate). Defines
+  `CART_POSITION_LIMIT`/`POLE_PITCH_LIMIT`.
+- **`train_cart_pole.py`** — `CustomCartPoleGzTrain` (Gymnasium wrapper
+  around `GzCartPoleScorer`) plus PPO training with `VecNormalize`
+  (required, not optional — see above). Saves
+  `cart_pole_gz_train_ppo.zip` + `vecnormalize.pkl` (both gitignored).
+  Run: `uv run python train_cart_pole.py`.
+- **`run_inference.py`** — out-of-process GUI inference: regenerates
+  the world, spawns `gz sim -s -r`/`gz sim -g`, drives `cart_joint` over
+  `/model/cart_pole/joint/cart_joint/cmd_force`, reads state from the
+  `joint_state` transport topic, resets via `reset.all` with
+  retry-on-no-op logic (see the reset-semantics notes above).
+  Run: `uv run python run_inference.py [--model PATH] [--vecnorm PATH]`.
+- **`nudge.py`** — manual testing helper, run in a second terminal
+  while `run_inference.py` is live: republishes a force burst to
+  `cart_joint` fast enough to override the policy's own commands, to
+  watch it recover from a disturbance.
+  Run: `uv run python nudge.py [duration] [force]`.
+- **`evaluate_policy.py`** — scratch measurement script (not pytest):
+  runs N episodes of a random or trained policy through
+  `CustomCartPoleGzTrain`, reports episode-length stats and a
+  termination-cause breakdown (pole-angle / cart-position / step-cap).
+  Originally written to diagnose a "trained policy == random baseline"
+  bug (missing `VecNormalize`).
+  Run: `uv run python evaluate_policy.py {random|trained} [--episodes N]`.
+- **`verify_dynamics.py`** — scratch check: the generated world is
+  grounded and at rest at spawn (not falling/sinking), and max-effort
+  force produces the expected `effort_limit / cart_mass` acceleration.
+- **`verify_scorer.py`** — scratch check: `GzCartPoleScorer` never
+  terminates while idle, and actuation moves the cart as expected.
+- **`verify_world_builder.py`** — scratch check: the generated SDF has
+  no leftover `<mesh>`/`tip_link`, and the spawn pose / pole-collision
+  cylinder stay derived from the live xacro rather than hardcoded
+  constants that could silently desync from it.
+- **`verify_reset_preserves_joint_state.py`** — scratch check:
+  `reset.all` (not `reset.model_only`, a no-op on this world) actually
+  zeros position/velocity and `JointStatePublisher` keeps publishing
+  afterward, with retry logic for the measured ~1-in-3 first-attempt
+  no-op.
+
+**Known bug, not yet fixed:** `world_builder.py`'s `REPO_ROOT`
+(`os.path.dirname(__file__)` + three `".."`s) assumes the file still
+lives three directories deep, i.e. at its original
+`ros2_ws/src/cart_pole_gz_train/world_builder.py` location. Now that it
+sits at this repo's root, that resolves to `/home` instead of this
+repo, so `XACRO_REL_PATH` points at a nonexistent
+`/home/ros2_ws/src/robot_description/robot/cart_pole.urdf.xacro`
+(verified: no `ros2_ws` exists there). Any fresh call to
+`generate_training_world()` — via `gz_scorer.py`, `train_cart_pole.py`,
+`run_inference.py`, or the `verify_*.py` scripts — will fail with
+`command failed: 'xacro ...'` until this is fixed. The `cart_pole_train.sdf`/
+`_generated.urdf` already sitting in this repo are stale leftovers from
+before the move, not evidence the pipeline currently works. Fixing this
+properly needs to know where this bipedal project's own `ros2_ws`
+(with a `robot_description` xacro) will actually live — not yet decided.
+
 ## 2. Xacro → SDF conversion (`ros2_ws` side only)
 
 The root `cart_pole/` project never needs this — its SDF is static and
