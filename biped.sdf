@@ -1,0 +1,254 @@
+<?xml version="1.0" ?>
+<sdf version="1.6">
+  <world name="biped">
+
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.001</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"></plugin>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"></plugin>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"></plugin>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry>
+        </visual>
+      </link>
+    </model>
+
+    <model name="biped">
+      <pose>0 0 0 0 0 0</pose>
+
+      <link name="torso_slider_x">
+        <pose>0 0 0 0 0 0</pose>
+        <inertial>
+          <mass>0.01</mass>
+          <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+      </link>
+
+      <link name="torso_slider_z">
+        <pose>0 0 0.98 0 0 0</pose>
+        <inertial>
+          <mass>0.01</mass>
+          <inertia><ixx>1e-6</ixx><iyy>1e-6</iyy><izz>1e-6</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+      </link>
+
+      <link name="torso">
+        <pose>0 0 0.98 0 0 0</pose>
+        <inertial>
+          <mass>20</mass>
+          <inertia><ixx>0.5</ixx><iyy>0.5</iyy><izz>0.3</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <geometry><box><size>0.3 0.2 0.5</size></box></geometry>
+          <material><ambient>0.25 0.25 0.3 1</ambient><diffuse>0.25 0.25 0.3 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <geometry><box><size>0.3 0.2 0.5</size></box></geometry>
+        </collision>
+      </link>
+
+      <link name="thigh_L">
+        <pose>0 0.06 0.73 0 0 0</pose>
+        <inertial>
+          <mass>5</mass>
+          <inertia><ixx>0.05</ixx><iyy>0.05</iyy><izz>0.005</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.35</size></box></geometry>
+          <material><ambient>0.85 0.45 0.05 1</ambient><diffuse>0.85 0.45 0.05 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.35</size></box></geometry>
+        </collision>
+      </link>
+
+      <link name="shank_L">
+        <pose>0 0.06 0.38 0 0 0</pose>
+        <inertial>
+          <mass>3</mass>
+          <inertia><ixx>0.03</ixx><iyy>0.03</iyy><izz>0.003</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.35</size></box></geometry>
+          <material><ambient>0.75 0.1 0.1 1</ambient><diffuse>0.75 0.1 0.1 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.35</size></box></geometry>
+        </collision>
+      </link>
+
+      <link name="foot_L">
+        <pose>0 0.06 0.03 0 0 0</pose>
+        <inertial>
+          <mass>0.5</mass>
+          <inertia><ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0.02 0 -0.015 0 0 0</pose>
+          <geometry><box><size>0.15 0.08 0.03</size></box></geometry>
+          <material><ambient>0.2 0.2 0.2 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0.02 0 -0.015 0 0 0</pose>
+          <geometry><box><size>0.15 0.08 0.03</size></box></geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+      </link>
+
+      <link name="thigh_R">
+        <pose>0 -0.06 0.73 0 0 0</pose>
+        <inertial>
+          <mass>5</mass>
+          <inertia><ixx>0.05</ixx><iyy>0.05</iyy><izz>0.005</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.35</size></box></geometry>
+          <material><ambient>0.85 0.45 0.05 1</ambient><diffuse>0.85 0.45 0.05 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.06 0.06 0.35</size></box></geometry>
+        </collision>
+      </link>
+
+      <link name="shank_R">
+        <pose>0 -0.06 0.38 0 0 0</pose>
+        <inertial>
+          <mass>3</mass>
+          <inertia><ixx>0.03</ixx><iyy>0.03</iyy><izz>0.003</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.35</size></box></geometry>
+          <material><ambient>0.75 0.1 0.1 1</ambient><diffuse>0.75 0.1 0.1 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0 0 -0.175 0 0 0</pose>
+          <geometry><box><size>0.05 0.05 0.35</size></box></geometry>
+        </collision>
+      </link>
+
+      <link name="foot_R">
+        <pose>0 -0.06 0.03 0 0 0</pose>
+        <inertial>
+          <mass>0.5</mass>
+          <inertia><ixx>0.001</ixx><iyy>0.001</iyy><izz>0.001</izz><ixy>0</ixy><ixz>0</ixz><iyz>0</iyz></inertia>
+        </inertial>
+        <visual name="visual">
+          <pose>0.02 0 -0.015 0 0 0</pose>
+          <geometry><box><size>0.15 0.08 0.03</size></box></geometry>
+          <material><ambient>0.2 0.2 0.2 1</ambient><diffuse>0.2 0.2 0.2 1</diffuse></material>
+        </visual>
+        <collision name="collision">
+          <pose>0.02 0 -0.015 0 0 0</pose>
+          <geometry><box><size>0.15 0.08 0.03</size></box></geometry>
+          <surface>
+            <friction><ode><mu>1.0</mu><mu2>1.0</mu2></ode></friction>
+          </surface>
+        </collision>
+      </link>
+
+      <joint name="torso_slide_x_joint" type="prismatic">
+        <parent>world</parent>
+        <child>torso_slider_x</child>
+        <axis>
+          <xyz>1 0 0</xyz>
+          <limit><lower>-1.79769e+308</lower><upper>1.79769e+308</upper></limit>
+        </axis>
+      </joint>
+
+      <joint name="torso_slide_z_joint" type="prismatic">
+        <parent>torso_slider_x</parent>
+        <child>torso_slider_z</child>
+        <axis>
+          <xyz>0 0 1</xyz>
+          <limit><lower>-1.0</lower><upper>2.0</upper></limit>
+        </axis>
+      </joint>
+
+      <joint name="torso_pitch_joint" type="revolute">
+        <parent>torso_slider_z</parent>
+        <child>torso</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-1.0</lower><upper>1.0</upper></limit>
+        </axis>
+      </joint>
+
+      <joint name="hip_L_joint" type="revolute">
+        <parent>torso</parent>
+        <child>thigh_L</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-1.5</lower><upper>1.5</upper><effort>60</effort></limit>
+        </axis>
+      </joint>
+
+      <joint name="knee_L_joint" type="revolute">
+        <parent>thigh_L</parent>
+        <child>shank_L</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-0.05</lower><upper>2.5</upper><effort>60</effort></limit>
+        </axis>
+      </joint>
+
+      <joint name="foot_L_joint" type="fixed">
+        <parent>shank_L</parent>
+        <child>foot_L</child>
+      </joint>
+
+      <joint name="hip_R_joint" type="revolute">
+        <parent>torso</parent>
+        <child>thigh_R</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-1.5</lower><upper>1.5</upper><effort>60</effort></limit>
+        </axis>
+      </joint>
+
+      <joint name="knee_R_joint" type="revolute">
+        <parent>thigh_R</parent>
+        <child>shank_R</child>
+        <axis>
+          <xyz>0 1 0</xyz>
+          <limit><lower>-0.05</lower><upper>2.5</upper><effort>60</effort></limit>
+        </axis>
+      </joint>
+
+      <joint name="foot_R_joint" type="fixed">
+        <parent>shank_R</parent>
+        <child>foot_R</child>
+      </joint>
+
+    </model>
+
+  </world>
+</sdf>
