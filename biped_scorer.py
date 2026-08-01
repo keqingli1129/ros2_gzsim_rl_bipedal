@@ -85,8 +85,13 @@ class BipedScorer:
             return
         self._ensure_initialized(ecm)
         for i, name in enumerate(_ACTUATED_JOINTS):
-            torque = float(np.clip(
-                self.command[i], -self.max_torque[name], self.max_torque[name]))
+            # command is expected normalized to [-1, 1] per joint (see
+            # train_biped.py's action space); scale by the live ECM effort
+            # limit here rather than baking a hardcoded torque cap into
+            # this method, so this stays a single source of truth for the
+            # real actuator range.
+            normalized = float(np.clip(self.command[i], -1.0, 1.0))
+            torque = normalized * self.max_torque[name]
             self.joints[name].set_force(ecm, [torque])
 
     def on_post_update(self, info, ecm):
@@ -114,6 +119,18 @@ class BipedScorer:
             hip_R_pos, hip_R_vel, knee_R_pos, knee_R_vel,
         ], dtype=np.float32)
 
+        # An ill-conditioned mass matrix (0.01kg helper links chained into
+        # a 20kg torso) under repeated random-policy torque over a long
+        # training run could produce non-finite state. Without this guard,
+        # NaN < -HEIGHT_DROP_LIMIT and abs(NaN) > PITCH_LIMIT are both
+        # False in Python, so termination would silently never fire and
+        # the NaN would poison VecNormalize's running statistics
+        # permanently. Must run before the termination check/latch and
+        # before the reward computation, so fall_penalty applies here too.
+        if not np.all(np.isfinite(self.state)):
+            self.terminated = True
+            self.state = np.nan_to_num(self.state, nan=0.0, posinf=0.0, neginf=0.0)
+
         if not self.terminated:
             self.terminated = (
                 torso_z_pos < -HEIGHT_DROP_LIMIT or abs(torso_pitch) > PITCH_LIMIT
@@ -133,6 +150,13 @@ class BipedScorer:
         self.command = np.zeros(4, dtype=np.float32)
         self.terminated = False
         self._initialized = False
+        # Every episode otherwise starts from a bit-identical, perfectly
+        # left/right-symmetric state - a small random torque impulse over the
+        # first 5ms breaks that symmetry (matches standard practice, e.g.
+        # MuJoCo walker envs' reset_noise_scale) without meaningfully
+        # disturbing the "motionless, upright" reset state.
+        noise = np.random.uniform(-0.05, 0.05, size=4).astype(np.float32)
+        obs, _reward, _term, _trunc, _info = self.step(noise)
         obs, _reward, _term, _trunc, _info = self.step(np.zeros(4, dtype=np.float32))
         return obs, {}
 

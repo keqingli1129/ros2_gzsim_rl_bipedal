@@ -4,6 +4,7 @@ ctypes.CDLL("/usr/lib/x86_64-linux-gnu/libgz-sim8.so", ctypes.RTLD_GLOBAL)
 
 import gymnasium as gym
 import numpy as np
+from gymnasium.wrappers import TimeLimit
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
@@ -11,7 +12,6 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from biped_scorer import BipedScorer, HEIGHT_DROP_LIMIT, PITCH_LIMIT
 
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-MAX_TORQUE = 60.0  # matches biped.sdf's declared <effort> on every leg joint
 
 
 class CustomBipedGzTrain(gym.Env):
@@ -19,14 +19,16 @@ class CustomBipedGzTrain(gym.Env):
 
     def __init__(self, env_config=None):
         self.env = BipedScorer()
-        # Order: [hip_L, knee_L, hip_R, knee_R], each a torque in
-        # [-MAX_TORQUE, MAX_TORQUE]. BipedScorer itself clamps against the
-        # live ECM effort limit (see its _ensure_initialized) - MAX_TORQUE
-        # here only needs to match biped.sdf's declared value closely
-        # enough to size this Box sanely, not be the actual enforced cap.
+        # Actions are normalized to [-1, 1] per joint (order: [hip_L,
+        # knee_L, hip_R, knee_R]). BipedScorer scales each by the live ECM
+        # effort limit internally (see its on_pre_update/_ensure_initialized),
+        # so no torque constant needs to live in this file at all - this
+        # also keeps CONTROL_COST_WEIGHT (copied from BipedalWalker-v3/
+        # Walker2d's [-1,1]-action convention) in the reward-scale range it
+        # was designed for, instead of a raw-N*m action blowing it up.
         self.action_space = gym.spaces.Box(
-            np.array([-MAX_TORQUE] * 4, dtype=np.float32),
-            np.array([MAX_TORQUE] * 4, dtype=np.float32),
+            np.array([-1.0] * 4, dtype=np.float32),
+            np.array([1.0] * 4, dtype=np.float32),
         )
         # 13-dim observation - see BipedScorer.on_post_update for the exact
         # assembly order. Bounds mirror train_cart_pole.py's convention:
@@ -57,7 +59,15 @@ def main():
     # of its position dimensions, which stalled learning outright until
     # VecNormalize was added. This env has the same shape of problem
     # (torque-scale/velocity dimensions vs. small angle/position ones).
-    venv = DummyVecEnv([lambda: Monitor(CustomBipedGzTrain())])
+    # A TimeLimit is required for learning-curve visibility, not just tidiness:
+    # a balancing-only policy with no forward-progress incentive would
+    # otherwise never trip HEIGHT_DROP_LIMIT/PITCH_LIMIT, meaning Monitor
+    # never logs a completed episode and the training run has no visible
+    # ep_rew_mean/ep_len_mean curve at all - the same trap this repo's
+    # train_cart_pole.py precedent avoids via its own termination bounds,
+    # but a policy that just stands still still needs *some* bound here.
+    # 1000 steps * 5ms/step = 5 simulated seconds per episode.
+    venv = DummyVecEnv([lambda: Monitor(TimeLimit(CustomBipedGzTrain(), max_episode_steps=1000))])
     venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
     model = PPO("MlpPolicy", venv, verbose=1, device="auto")
     model.learn(total_timesteps=100_000)

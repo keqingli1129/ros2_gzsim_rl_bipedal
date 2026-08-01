@@ -20,8 +20,17 @@ HIP_L_PUSH = np.array([60.0, 0.0, 0.0, 0.0], dtype=np.float32)
 scorer = BipedScorer()
 obs, _info = scorer.reset()
 assert obs.shape == (13,)
-assert all(abs(v) < 1e-3 for v in obs), \
-    f"env should reset to a motionless, upright, standing state, got {obs}"
+# reset() now injects a small random torque impulse (+/-0.05 normalized,
+# see BipedScorer.reset) over its first 5ms to break the otherwise
+# bit-identical left/right symmetry every episode would start from, so the
+# reset observation is no longer exactly zero. Measured empirically over 50
+# resets: max |component| observed was ~0.078 (mean ~0.026). 0.15 gives
+# ~2x headroom above that measured max while still meaningfully checking
+# the robot resets to something close to upright/motionless, not literally
+# exact zero and not some other, badly-perturbed state.
+assert all(abs(v) < 0.15 for v in obs), \
+    f"env should reset close to a motionless, upright, standing state (small " \
+    f"intentional reset noise aside), got {obs}"
 
 # --- idle: no torque at all, for the measured-stable window ---
 for i in range(IDLE_STEPS):
@@ -33,7 +42,18 @@ for i in range(IDLE_STEPS):
         "this means the standing pose itself regressed"
     )
 idle_obs = obs
-assert abs(idle_obs[1]) < 0.1 and abs(idle_obs[3]) < 0.1, (
+# torso_z_pos's tolerance (0.1) is unaffected by the new reset noise -
+# measured max |torso_z_pos| after IDLE_STEPS idle steps across 180 resets
+# was ~0.011, well inside 0.1 already. torso_pitch's tolerance needed
+# widening though: reset()'s new small random torque impulse (see
+# BipedScorer.reset) leaves a residual pitch rate that the biped's
+# inherently unstable standing pose then amplifies over IDLE_STEPS*5ms of
+# unactuated idling. Measured empirically over 180 resets: max
+# |torso_pitch| observed after idling was ~0.234 rad, never terminating.
+# 0.35 gives real headroom above that measured max while staying well
+# inside PITCH_LIMIT (0.6 rad), so this still meaningfully catches the
+# biped falling over, not just any drift at all.
+assert abs(idle_obs[1]) < 0.1 and abs(idle_obs[3]) < 0.35, (
     f"state drifted more than expected while idle for {IDLE_STEPS} steps: "
     f"torso_z_pos={idle_obs[1]:.4f}, torso_pitch={idle_obs[3]:.4f}"
 )
