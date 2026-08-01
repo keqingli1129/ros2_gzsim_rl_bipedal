@@ -86,12 +86,10 @@ class BipedScorer:
         self._ensure_initialized(ecm)
         for i, name in enumerate(_ACTUATED_JOINTS):
             # command is expected normalized to [-1, 1] per joint (see
-            # train_biped.py's action space); scale by the live ECM effort
-            # limit here rather than baking a hardcoded torque cap into
-            # this method, so this stays a single source of truth for the
-            # real actuator range.
-            normalized = float(np.clip(self.command[i], -1.0, 1.0))
-            torque = normalized * self.max_torque[name]
+            # train_biped.py's action space) and is already clamped to that
+            # range in step()/reset(), so this is a single source of truth
+            # for the real actuator range without re-clamping here.
+            torque = float(self.command[i]) * self.max_torque[name]
             self.joints[name].set_force(ecm, [torque])
 
     def on_post_update(self, info, ecm):
@@ -141,7 +139,13 @@ class BipedScorer:
         self.reward = float(torso_x_vel - control_cost - fall_penalty)
 
     def step(self, action):
-        self.command = np.asarray(action, dtype=np.float32)
+        # Clamp once, here, so every downstream reader of self.command
+        # (on_pre_update's torque application AND on_post_update's
+        # control_cost) sees the same already-clamped [-1, 1] values -
+        # BipedScorer is self-enforcing rather than depending on the caller
+        # (e.g. SB3 clipping sampled actions to the declared Box(-1, 1)
+        # action space before calling env.step()) to keep it in range.
+        self.command = np.clip(np.asarray(action, dtype=np.float32), -1.0, 1.0)
         self.server.run(True, 5, False)
         return self.state, self.reward, self.terminated, False, {}
 

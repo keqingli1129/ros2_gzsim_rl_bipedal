@@ -15,7 +15,7 @@ from biped_scorer import BipedScorer
 
 IDLE_STEPS = 100  # 500ms at 5ms/step - well inside the measured ~1s stable window
 ZERO_ACTION = np.zeros(4, dtype=np.float32)
-HIP_L_PUSH = np.array([60.0, 0.0, 0.0, 0.0], dtype=np.float32)
+HIP_L_PUSH = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
 
 scorer = BipedScorer()
 obs, _info = scorer.reset()
