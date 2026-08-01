@@ -16,3 +16,5 @@ _generated.urdf
 cart_pole_train.sdf
 cart_pole_gz_train_ppo.zip
 vecnormalize.pkl
+biped_ppo.zip
+biped_vecnormalize.pkl
