@@ -1,41 +1,40 @@
-# RL training/inference, xacro→SDF conversion, and future ROS2 model integration
+# RL training environment setup and the bipedal-walker gz-sim project
 
-Context: we considered converting `ros2_ws/src/cart_pole_gz_train/` (a
-non-colcon SB3 PPO training utility) into a real colcon package with
-`rclpy.Node`-wrapped entry points (`robot_rl_node`), so it would be
-launchable via `ros2 run`/show up in the ROS2 graph. That idea was
-scrapped. This doc captures why, how the existing training/inference
-pipelines actually work (both the root `cart_pole/` project and its
-`ros2_ws` port), how the xacro→SDF conversion works, and what's left
-open for when a trained model needs to actually drive a robot through a
-real ROS2 node.
+This repo trains a bipedal-walker RL policy against Gazebo Sim (gz-sim,
+Harmonic) using Stable-Baselines3 PPO. This doc covers how the Python/gz
+environment is set up, why the training utility is deliberately not a
+ROS2 node, and how the bipedal environment itself is built.
+
+An earlier cart-pole precedent (a standalone project plus a ROS2-robot
+port) lived in this repo and established the architectural pattern the
+bipedal work follows — in-process `gz.sim8.TestFixture`, joint-based ECM
+access, `VecNormalize`-wrapped SB3 PPO — but its source files have been
+removed now that the bipedal port supersedes it. The lessons that still
+apply are folded into the sections below rather than kept as a separate
+history.
 
 ## What this project is
 
-A cart-pole reinforcement-learning pipeline built on Gazebo Sim (gz-sim,
-Harmonic) and Stable-Baselines3 PPO, where the robot's canonical
-description lives in a ROS2 package as xacro. It has two deliberately
-separate parts:
+A bipedal-walker reinforcement-learning pipeline built on Gazebo Sim and
+Stable-Baselines3 PPO. It has two deliberately separate parts:
 
 1. **A training/inference utility — not a ROS2 node, not a colcon
    package.** Trains a PPO policy headlessly, in-process, talking to the
    robot's physics directly through `gz.sim8` bindings (no `rclpy`, no
    ROS2 topics — this is a deliberate speed choice, not an oversight).
-   Can also run inference with a live GUI by spawning `gz sim` as
-   subprocesses and driving the robot over `gz.transport13`. Produces two
-   artifacts that must travel together: the trained policy (`.zip`) and
-   its `VecNormalize` running statistics (`.pkl`) — using one without the
-   other silently collapses to random-baseline behavior, not a visible
-   error.
-2. **A future ROS2 control node — not yet built.** Loads those two
-   artifacts and drives the real/simulated robot over actual ROS2
-   topics/services (`ros_gz_bridge`, `/joint_states`, a force/effort
-   command topic, a reset service), fed the artifact paths via a launch
-   argument rather than baked in. This node only needs inference-time
-   dependencies (`stable-baselines3`, `torch`) — not the training stack.
+   Produces two artifacts that must travel together: the trained policy
+   (`.zip`) and its `VecNormalize` running statistics (`.pkl`) — using
+   one without the other silently collapses to random-baseline behavior,
+   not a visible error.
+2. **A future ROS2 control node — not yet built.** Would load those two
+   artifacts and drive a real/simulated robot over actual ROS2
+   topics/services, fed the artifact paths via a launch argument rather
+   than baked in. This node would only need inference-time dependencies
+   (`stable-baselines3`, `torch`) — not the training stack.
 
 The dependency and process boundary between the two is deliberate, not
-incidental — see the next section for why.
+incidental — see "Why a standalone training utility, not a ROS2 node"
+below for why.
 
 ## Environment setup
 
@@ -64,7 +63,22 @@ venv manager works) holding:
   override-dependencies = ["opencv-python-headless>=5.0.0"]
   ```
 
-  Install with `uv sync`.
+  **This override alone is not sufficient** — verified directly on this
+  machine (`uv 0.11.28`): `override-dependencies` only overrides a
+  version constraint for a package name already in the dependency graph,
+  it does not substitute one package name for another. With both
+  `opencv-python` (pulled in by `stable-baselines3[extra]`) and
+  `opencv-python-headless` (the direct override) present, `uv sync`
+  installs *both* distributions, and whichever finishes writing to
+  `site-packages/cv2/` last wins the import — non-deterministic. Always
+  run `scripts/setup_env.sh` instead of a bare `uv sync`: it runs
+  `uv sync` then force-reinstalls `opencv-python-headless` last
+  (`uv pip install --reinstall-package opencv-python-headless ...`) so
+  the headless build deterministically wins, and verifies this by
+  confirming `cv2.imshow()` raises "not implemented" rather than
+  succeeding (checking `hasattr(cv2, 'imshow')` is not a valid test —
+  the headless build still exposes the attribute as a stub that raises
+  when called).
 
 **2. Gazebo Python bindings** — installed system-wide via apt (the
 `gz-harmonic` package group, Ubuntu Noble / gz-sim 8), landing in
@@ -84,10 +98,32 @@ import ctypes
 ctypes.CDLL("/usr/lib/x86_64-linux-gnu/libgz-sim8.so", ctypes.RTLD_GLOBAL)
 ```
 
-**3. The ROS2 workspace** (only needed for the xacro→SDF conversion in
-part 2 below, or eventually building the control node) — build with the
-venv's `python3` *not* shadowing the system one, since `ament`/
-`catkin_pkg` need the system Python, not the isolated venv:
+This is also why Pylance/VSCode may show `gz.*` imports as unresolved
+even though they work at runtime: the editor's selected interpreter (the
+venv) genuinely doesn't have `gz` installed in it. Fixed here via
+`.vscode/settings.json`'s `python.analysis.extraPaths` pointing at
+`/usr/lib/python3/dist-packages` — but that's a separate, independently
+configured universe from whatever `PYTHONPATH` a given invocation
+actually runs under; one resolving cleanly is not evidence the other
+does.
+
+**Do not** install `stable-baselines3`/`gymnasium`/training-time `opencv`
+into whatever Python interpreter a future ROS2 control node's
+`colcon build`/`ros2 run` resolves to — `colcon build` won't do this for
+you anyway (see below), and it risks the `cv2` conflict above with
+anything else in that environment. Only the future control node's
+minimal runtime deps (`stable-baselines3` for `.load()`/`.predict()`,
+`torch`) should ever need to land there, and only once that node
+actually exists.
+
+**No `ros2_ws`/xacro in this repo currently.** The bipedal robot's
+description (`biped.sdf`) is static and hand-authored — there's no xacro
+to convert and no colcon build needed for the RL pipeline itself. If a
+future robot description needs to be shared with a real ROS2 launch
+stack (making xacro the canonical source, with SDF derived from it),
+that would need a `ros2_ws` built with the venv's `python3` *not*
+shadowing the system one, since `ament`/`catkin_pkg` need the system
+Python:
 
 ```bash
 cd ros2_ws
@@ -95,19 +131,7 @@ PATH=$(echo "$PATH" | tr ':' '\n' | grep -v '\.venv' | paste -sd:) VIRTUAL_ENV= 
 source install/setup.bash
 ```
 
-The xacro→SDF conversion below shells out to `xacro`/`gz sdf -p`, which
-needs this build to already exist and must run with the venv stripped
-from `PATH` for the same reason.
-
-**Do not** install `stable-baselines3`/`gymnasium`/training-time `opencv`
-into whatever Python interpreter `colcon build`/`ros2 run` resolves to —
-`colcon build` won't do this for you anyway (see below), and it risks
-the `cv2` conflict above with anything else in that environment. Only
-the future control node's minimal runtime deps (`stable-baselines3` for
-`.load()`/`.predict()`, `torch`) should ever need to land there, and only
-once that node actually exists.
-
-## Why the ROS2-node conversion was scrapped
+## Why a standalone training utility, not a ROS2 node
 
 - Training is a one-shot, offline, batch process (run it, get a
   `.zip`/`.pkl`, done). It never needs ROS2-graph presence — no topics,
@@ -130,310 +154,106 @@ once that node actually exists.
   bake into the generated entry-point script's shebang — no different
   from installing them for a plain script.
 - Real conflict risk: `stable-baselines3`'s base install requires
-  `opencv-python` (confirmed indirectly — this repo's `pyproject.toml`
-  needs a project-wide `[tool.uv] override-dependencies` to force
-  `opencv-python-headless` instead, which wouldn't be necessary if the
-  headless variant only mattered for `[extra]`). `opencv-python` and
+  `opencv-python` (confirmed above). `opencv-python` and
   `opencv-python-headless` both install the same `cv2` module name, so
   they cannot coexist in one Python environment — installing one removes
   the other for every package sharing that interpreter, not just the RL
   node. If some other node in the same ROS2 environment needs
   `cv2.imshow()`-style GUI windows, you have a genuine, unresolvable
   conflict unless the two nodes run under separate Python environments.
-- VSCode/Pylance resolving an import cleanly is not evidence it will
-  resolve at `ros2 run` time — Pylance checks the selected interpreter
-  (usually a venv) plus `python.analysis.extraPaths`
-  (`.vscode/settings.json`), which is a different, independently
-  configured universe from whatever interpreter `ros2 run` actually
-  executes the node under.
 
 Conclusion: keep training fully independent of the ROS2/colcon
 dependency-resolution story. Only a trained artifact (a `.zip` +
-`vecnormalize.pkl`) needs to cross into ROS2 territory — not the full
-`gymnasium`/`stable-baselines3`/training-time-opencv stack.
+`vecnormalize.pkl`) would need to cross into ROS2 territory — not the
+full `gymnasium`/`stable-baselines3`/training-time-opencv stack.
 
-## 1. How training and inference work today (root `cart_pole/` project)
+## The bipedal walker environment
 
-`cart_pole/cart_pole_env.py` has two independent sim-interaction paths;
-see the root `CLAUDE.md`'s Architecture section for the full detail.
-Summary:
+Design spec: `docs/superpowers/specs/2026-07-31-bipedal-walker-design.md`
+Implementation plan: `docs/superpowers/plans/2026-07-31-bipedal-walker.md`
 
-**Training (headless, in-process).** `GzRewardScorer` loads
-`cart_pole.sdf` through `gz.sim8.TestFixture` and hooks
-`on_pre_update`/`on_post_update`:
-- `on_pre_update` applies ±2000N world force to the chassis based on the
-  pending discrete action.
-- `on_post_update` reads pole pitch / cart position from the ECM,
-  computes reward and termination (`|pitch| > 0.48 rad` or
-  `|cart x| > 4.8 m`), and estimates velocity by **finite difference**
-  across the 5ms step (`(pose - prev_pose) / 0.005`) — deliberately
-  matching the estimator inference actually sees, rather than reading
-  the physics engine's true instantaneous velocity, to avoid a
-  train/inference distribution mismatch (measured ~76% relative error
-  between the two estimators).
-- Each Gym `step()` runs the server for 5 blocking sim iterations
-  (1ms physics step × 5 = 5ms sim time per env step).
-- `reset()` rebuilds the `TestFixture`/server from scratch rather than
-  calling `server.reset_all()` — the latter desyncs the physics engine
-  from the ECM (force application/velocity reads silently stop working)
-  while leaving entity IDs unchanged, so it doesn't even look like a
-  stale-handle bug.
-- `CustomCartPole` wraps this in the Gymnasium API: `Discrete(2)`
-  actions, 4-dim `Box` observation (cart x, cart velocity, pole pitch,
-  pole angular velocity).
+A minimal planar (sagittal-plane) biped: torso on a passive 3-joint
+planar mount (prismatic-x, prismatic-z, revolute-pitch — free, not
+actuated, the same role a pole plays in a cart-pole balance task), two
+legs each with an actuated hip and knee joint plus a fixed foot.
 
-**Inference (out-of-process, with GUI).** After training, the script
-spawns `gz sim -s -r` and `gz sim -g` as **subprocesses** and talks over
-Gazebo transport instead of the in-process ECM:
-- Forces are published as `EntityWrench` messages to
-  `/world/cart_pole/wrench/persistent` — not the plain `/wrench` topic,
-  which only holds a force for one 1ms physics tick before dropping it
-  (a fifth of training's per-action authority).
-- State is read via synchronous request/response to the
-  `/world/cart_pole/state` service, decoded by replicating gz-sim's
-  internal FNV-1a component-type hash to identify `Name`/`Pose`
-  components, composing model+link local poses into world frame.
-  Velocities are finite-differenced against the response's own
-  `sim_time`.
-- `/wrench/persistent` entries can't be cleared in this gz-sim build
-  (a known bug — `OnWrenchClear`'s entity match never succeeds) and
-  survive a world reset untouched, so inference tracks the net force
-  already applied and publishes only the delta needed to reach a new
-  target (including zeroing before a reset).
-- Requires `ctypes.CDLL(".../libgz-sim8.so", RTLD_GLOBAL)` to run
-  **before** any `gz.*` import, or symbol resolution fails. Depends on
-  the `ApplyLinkWrench` and `SceneBroadcaster` plugins declared in
-  `cart_pole.sdf`.
-
-`cart_pole.sdf` here is a **static, hand-authored** file — there is no
-xacro anywhere in the root `cart_pole/` project, so no conversion step
-is needed for this path at all.
-
-## The `ros2_ws` port (`cart_pole_gz_train/`) — same idea, real robot
-
-`ros2_ws/src/cart_pole_gz_train/` re-implements the same training/
-inference split against the actual ROS2 workspace's robot
-(`robot_description`'s `cart_pole` model, joints `cart_joint`/
-`pole_joint`) instead of the root project's standalone `vehicle_green`
-model. Key differences from the root project, since this is the more
-relevant precedent for "a trained model driving a real robot":
-
-- **Joint-based ECM access, not wrench-based.** `gz_scorer.py`'s
-  `GzCartPoleScorer` reads `cart_joint`/`pole_joint` position/velocity
-  directly via their `Joint` components — real physics-engine velocity,
-  no finite-difference estimate needed (unlike the root project, which
-  has no joint to read from, only a free-floating wrench-driven body).
-  Actuation is `cart_joint.set_force(ecm, [±max_force])`, where
-  `max_force` is read live from the joint's actual effort limit
-  (verified: 1,000,000N produces the same realized acceleration as 30N —
-  it's a hard actuator clamp), not hardcoded.
-- **Inference drives the same joint over ROS2-adjacent gz-transport
-  topics**: `/model/cart_pole/joint/cart_joint/cmd_force` (a plain
-  `Double`, consumed by the `ApplyJointForce` gz-sim plugin declared in
-  the xacro), reading state from
-  `/world/cart_pole_train/model/cart_pole/joint_state` (`JointStatePublisher`).
-- **Reset semantics were measured, not assumed**, and differ from the
-  root project and from `commander`'s DQN:
-  - This world's `reset.model_only` is a **complete no-op** (measured:
-    position/velocity keep evolving along their pre-reset trajectory,
-    zero discontinuity).
-  - `reset.all` **does** work here and does *not* hit the
-    `JointStatePublisher`-killing teardown bug `commander` hit on its
-    own, differently-spawned world (`robomaster_rale`) — that bug is
-    real but specific to how a model enters the world (runtime-spawned
-    vs. declared whole in the SDF `gz sim -s -r` loads), so reset-type
-    safety does not generalize between worlds without re-measuring.
-  - `reset.all`'s own `ok` RPC flag is not trustworthy in either
-    direction (~1-in-9 false `ok=False` on a reset that actually
-    succeeded) — the caller checks the real postcondition (position/
-    velocity against the termination thresholds) instead of trusting the
-    flag, retrying up to `MAX_RESET_ATTEMPTS` times.
-- **`VecNormalize` is a hard requirement, not an optimization.** This
-  env's velocity dimensions run 10-30x larger than its position
-  dimensions, which stalled learning outright until `VecNormalize`
-  (running mean/std observation normalization) was added. Any consumer
-  of the saved policy — training, evaluation, or a future control node —
-  **must** load `vecnormalize.pkl` alongside the `.zip` and feed it
-  normalized observations; feeding raw observations doesn't degrade
-  gracefully, it silently collapses to random-baseline performance. See
-  `evaluate_policy.py`/`run_inference.py`'s `_load_normalizer`, which
-  hard-errors if the stats file is missing rather than proceeding.
-
-This is the pattern a future control node would need to replicate:
-build a `DummyVecEnv`-wrapped stub matching the trained observation/
-action space, `VecNormalize.load(path, venv)` with `venv.training = False`,
-normalize each observation before calling `model.predict(...,
-deterministic=True)`.
+- **Joint-based ECM access.** `BipedScorer` reads all 7 non-fixed
+  joints' position/velocity directly via their `Joint` components — real
+  physics-engine velocity, no finite-difference estimate. Actuation is
+  continuous, normalized: each of the 4 actuated joints takes a torque
+  command in `[-1, 1]`, clamped and scaled by that joint's own live
+  `effort_limits(ecm)` value inside `on_pre_update` — never a hardcoded
+  torque cap that could silently desync from `biped.sdf`.
+- **`self.command` is clamped once, in `step()`**, so both the applied
+  torque and the reward's control-cost term always agree — this matters
+  because reward terms sized for normalized `[-1,1]` actions (e.g. a
+  BipedalWalker-v3/Walker2d-style control-cost weight) silently blow up
+  by orders of magnitude if computed against raw, unnormalized torques.
+- **A NaN/inf guard on the observation** latches termination and
+  sanitizes the state if the physics ever produces a non-finite value —
+  without it, `NaN < threshold` and `abs(NaN) > threshold` are both
+  `False` in Python, so termination would never fire and the NaN would
+  permanently poison `VecNormalize`'s running statistics.
+- **`VecNormalize` is a hard requirement, not an optimization** (same
+  lesson as the earlier cart-pole precedent): this env's velocity
+  dimensions are on a different scale than its position dimensions, and
+  PPO doesn't normalize observations by default.
+- **Episodes are time-limited** (`gymnasium.wrappers.TimeLimit`) — a
+  policy that merely balances in place with no forward-progress
+  incentive would otherwise never terminate, meaning `Monitor` never
+  logs an episode and a training run would have no visible learning
+  curve at all.
+- **Reset applies a small random torque impulse** to break left/right
+  symmetry — every episode would otherwise start from a bit-identical,
+  perfectly symmetric state, removing state-distribution coverage.
 
 ### File reference (this repo)
 
-The `ros2_ws` port's files above live directly at this repo's root, not
-under `ros2_ws/src/cart_pole_gz_train/` (there is no `ros2_ws/` in this
-repo). All commands below need
-`PYTHONPATH=/usr/lib/python3/dist-packages` and `uv run` per the
-Environment setup section.
+All commands need `PYTHONPATH=/usr/lib/python3/dist-packages` and
+`uv run` per Environment setup above.
 
-- **`cart_pole_env.py`** — the root-project pattern (see section 1
-  above): single file, headless in-process training + out-of-process
-  GUI inference against the static, hand-authored `cart_pole.sdf` and
-  its wrench-driven `vehicle_green` model.
-  Run: `uv run python cart_pole_env.py`.
-- **`world_builder.py`** — the xacro→SDF pipeline
-  (`generate_training_world`): runs `xacro` + `gz sdf -p`, strips mesh
-  visuals/collisions down to primitives, drops `tip_link`, injects the
-  measured spawn pose, wraps the result in a full `<world>` with
-  physics/GUI plugins. Produces `cart_pole_train.sdf` (gitignored — a
-  build output, not a source file). **Currently broken in this repo** —
-  see the note below.
-- **`gz_scorer.py`** — `GzCartPoleScorer`, the joint-based in-process
-  Gazebo System (reads `cart_joint`/`pole_joint` position/velocity
-  straight from the ECM, no finite-difference estimate). Defines
-  `CART_POSITION_LIMIT`/`POLE_PITCH_LIMIT`.
-- **`train_cart_pole.py`** — `CustomCartPoleGzTrain` (Gymnasium wrapper
-  around `GzCartPoleScorer`) plus PPO training with `VecNormalize`
-  (required, not optional — see above). Saves
-  `cart_pole_gz_train_ppo.zip` + `vecnormalize.pkl` (both gitignored).
-  Run: `uv run python train_cart_pole.py`.
-- **`run_inference.py`** — out-of-process GUI inference: regenerates
-  the world, spawns `gz sim -s -r`/`gz sim -g`, drives `cart_joint` over
-  `/model/cart_pole/joint/cart_joint/cmd_force`, reads state from the
-  `joint_state` transport topic, resets via `reset.all` with
-  retry-on-no-op logic (see the reset-semantics notes above).
-  Run: `uv run python run_inference.py [--model PATH] [--vecnorm PATH]`.
-- **`nudge.py`** — manual testing helper, run in a second terminal
-  while `run_inference.py` is live: republishes a force burst to
-  `cart_joint` fast enough to override the policy's own commands, to
-  watch it recover from a disturbance.
-  Run: `uv run python nudge.py [duration] [force]`.
-- **`evaluate_policy.py`** — scratch measurement script (not pytest):
-  runs N episodes of a random or trained policy through
-  `CustomCartPoleGzTrain`, reports episode-length stats and a
-  termination-cause breakdown (pole-angle / cart-position / step-cap).
-  Originally written to diagnose a "trained policy == random baseline"
-  bug (missing `VecNormalize`).
-  Run: `uv run python evaluate_policy.py {random|trained} [--episodes N]`.
-- **`verify_dynamics.py`** — scratch check: the generated world is
-  grounded and at rest at spawn (not falling/sinking), and max-effort
-  force produces the expected `effort_limit / cart_mass` acceleration.
-- **`verify_scorer.py`** — scratch check: `GzCartPoleScorer` never
-  terminates while idle, and actuation moves the cart as expected.
-- **`verify_world_builder.py`** — scratch check: the generated SDF has
-  no leftover `<mesh>`/`tip_link`, and the spawn pose / pole-collision
-  cylinder stay derived from the live xacro rather than hardcoded
-  constants that could silently desync from it.
-- **`verify_reset_preserves_joint_state.py`** — scratch check:
-  `reset.all` (not `reset.model_only`, a no-op on this world) actually
-  zeros position/velocity and `JointStatePublisher` keeps publishing
-  afterward, with retry logic for the measured ~1-in-3 first-attempt
-  no-op.
+- **`biped.sdf`** — static, hand-authored world + robot model (9 links,
+  9 joints: 3 passive planar-mount + 4 actuated leg joints + 2 fixed
+  foot joints).
+- **`biped_scorer.py`** — `BipedScorer`: the in-process Gazebo System
+  that applies torques and reads joint state each step. Exports
+  `HEIGHT_DROP_LIMIT`/`PITCH_LIMIT` (termination thresholds).
+- **`train_biped.py`** — `CustomBipedGzTrain` (Gymnasium wrapper) plus
+  PPO + `VecNormalize` training. Saves `biped_ppo.zip` +
+  `biped_vecnormalize.pkl` (both gitignored — build outputs, not source).
+  Run: `uv run python train_biped.py`.
+- **`verify_biped_dynamics.py`** — scratch check (not pytest): the robot
+  is grounded and at rest at spawn, and max-effort torque produces the
+  expected motion. Distinguishes "broken spawn" from "this is an
+  inherently unstable standing pose without active balance control" —
+  it does not assert indefinite passive stability, since the design
+  never has that (measured: stable for ~1s unactuated, then falls over
+  within 2-3s, which is expected).
+- **`verify_biped_scorer.py`** — scratch check: exercises `BipedScorer`
+  directly — idle stability, actuated movement, and an explicit
+  termination/fall-penalty/latch scenario.
 
-**Known bug, not yet fixed:** `world_builder.py`'s `REPO_ROOT`
-(`os.path.dirname(__file__)` + three `".."`s) assumes the file still
-lives three directories deep, i.e. at its original
-`ros2_ws/src/cart_pole_gz_train/world_builder.py` location. Now that it
-sits at this repo's root, that resolves to `/home` instead of this
-repo, so `XACRO_REL_PATH` points at a nonexistent
-`/home/ros2_ws/src/robot_description/robot/cart_pole.urdf.xacro`
-(verified: no `ros2_ws` exists there). Any fresh call to
-`generate_training_world()` — via `gz_scorer.py`, `train_cart_pole.py`,
-`run_inference.py`, or the `verify_*.py` scripts — will fail with
-`command failed: 'xacro ...'` until this is fixed. The `cart_pole_train.sdf`/
-`_generated.urdf` already sitting in this repo are stale leftovers from
-before the move, not evidence the pipeline currently works. Fixing this
-properly needs to know where this bipedal project's own `ros2_ws`
-(with a `robot_description` xacro) will actually live — not yet decided.
+## Open: how a trained model gets used in a real ROS2 node (future work)
 
-## 2. Xacro → SDF conversion (`ros2_ws` side only)
+Not yet implemented or designed in detail:
 
-The root `cart_pole/` project never needs this — its SDF is static and
-hand-authored. `ros2_ws`'s robot is different: its canonical description
-is `robot_description/robot/cart_pole.urdf.xacro`, shared with the real
-`robot_launch` stack, so the training world has to be *derived* from it
-rather than hand-authored, to avoid a second, silently-drifting source
-of truth for the robot's physical parameters (mass, inertia, joint
-limits). `ros2_ws/src/cart_pole_gz_train/world_builder.py` does this in
-four steps, run fresh every process (not cached from a previous run's
-leftover file — a stale leftover could silently reflect an older xacro
-checkout):
-
-1. **`run_xacro()`** — shells out to `xacro cart_pole.urdf.xacro`,
-   producing URDF text. Requires `ros2_ws` to already be
-   `colcon build`-ed, since `xacro` (via `ament_index_python`) needs to
-   resolve the `robot_description` package — this is why
-   `cart_pole_gz_train` must be run from the repo root with
-   `ros2_ws/install/setup.bash` sourced (venv stripped from `PATH`; see
-   `_run_in_ros_env`).
-2. **`convert_urdf_to_sdf()`** — shells out to `gz sdf -p <urdf>`,
-   converting URDF to SDF text.
-3. **`postprocess_model_sdf()`** — strips mesh visuals/collisions down to
-   primitive shapes (headless training never renders, so simplified
-   collision is cheaper and mesh-based collision isn't needed), replacing
-   each with a matching primitive `<visual>` too (`run_inference.py`'s
-   GUI loads this same generated world, and a model with collision but
-   zero visuals renders as an empty viewport even though it exists in the
-   ECM). Also drops `tip_link`/`tip_joint` (mass 0.0001, physically
-   negligible).
-4. **`wrap_in_world()`** — injects a spawn pose (`z=0.3`, half of
-   `base_footprint`'s 0.6m collision box height — measured to be the
-   smallest lift that spawns already at rest; `z=0` leaves the base
-   half-buried and jams the cart at ~1% authority, `z=2` costs a
-   ~590ms free-fall every episode), then wraps the processed `<model>`
-   in a full `<world>` with physics/plugin declarations and a `<gui>`
-   block (camera pose, per-link visual materials — for
-   `run_inference.py`'s benefit only; headless training never renders).
-   A `<gui>` element in SDF *replaces* gz-sim's entire default GUI config
-   rather than extending it — every plugin the GUI should show
-   (`WorldControl`, `WorldStats`, `EntityTree`, not just the 3D view) has
-   to be declared explicitly or it silently disappears.
-
-Output is `cart_pole_train.sdf` — gitignored, an output not a source;
-don't hand-edit it, edit the xacro or `world_builder.py`'s
-postprocessing instead.
-
-**Dead end to avoid**: `robot_description/robot/cart_pole.sdf` and
-`cart_pole.urdf` are static, checked-in files from the very first commit
-to this repo (June 2022), predating the switch to gz-sim/Harmonic.
-Verified directly (diffed a live `xacro` run against the checked-in
-file): the checked-in URDF declares
-`<plugin filename="libgazebo_ros_control.so" name="gazebo_ros_control"/>`
-— a **Gazebo Classic** (ROS1-era) plugin — instead of the
-`ApplyJointForce`/`JointStatePublisher` gz-sim plugins this entire
-pipeline actually depends on. Nothing in `ros2_ws` reads these two static
-files; they're dead weight, not a valid shortcut around the
-xacro→SDF regeneration.
-
-## 3. Open: how a trained model gets used in a real ROS2 node (future work)
-
-Not yet implemented or designed in detail. What's already settled from
-prior discussion, to pick up from rather than re-derive:
-
-- **No separate "inference node."** The trained model should be plugged
-  into the existing launch file (`robot_launch`'s
-  `launch_simulation.launch.py`) — e.g. a launch argument pointing at
-  the model/`vecnormalize.pkl` path, fed to whatever node actually runs
-  inference — rather than a standalone script/node with its own CLI.
+- **No separate "inference node."** A trained model should be plugged
+  into an existing launch file (e.g. a launch argument pointing at the
+  model/`vecnormalize.pkl` path, fed to whatever node actually runs
+  inference) rather than a standalone script/node with its own CLI.
 - **Only the control node itself needs ROS2-side Python deps**
   (`stable-baselines3`, `torch`, and whatever `vecnormalize.pkl`
-  unpickling needs) — not the full training stack (no `gymnasium` env
-  authoring, no training-time `opencv` requirement beyond whatever
-  `stable-baselines3`'s base install pulls in for `PPO.load()`/
-  `.predict()` to work at all). Confirm at implementation time whether
-  a bare `stable-baselines3` install (no `[extra]`) is sufficient for
-  load+predict, to minimize the new dependency footprint on whatever
-  Python environment the control node runs under.
-- **Still open / not yet decided:**
-  - Where the trained artifacts (`.zip`, `vecnormalize.pkl`) physically
-    live so a colcon-built control node can find them — a path argument,
-    package share-data, or something else.
-  - Which node actually does this — extend `commander`, or add
-    something new — and how it reconciles with `commander`'s existing
-    `reset.model_only` convention for the `robomaster_rale` world (the
-    `cart_pole_gz_train` port above uses `reset.all` instead, but that
-    was measured against a *different*, SDF-declared world — do not
-    assume it generalizes to `robomaster_rale` without re-measuring, per
-    the reset-semantics note above).
-  - Whether to read pole angle from `JointState.position` directly
-    (available on the real `/joint_states` message) instead of
-    `commander`'s current manual yaw-angle integration workaround, which
-    was written for the DQN's own observation quirk rather than being a
-    hard constraint on what `JointState` carries.
+  unpickling needs) — not the full training stack. Confirm at
+  implementation time whether a bare `stable-baselines3` install (no
+  `[extra]`) is sufficient for load+predict, to minimize the new
+  dependency footprint on whatever Python environment the control node
+  runs under.
+- **Still open:** where the trained artifacts (`.zip`,
+  `vecnormalize.pkl`) physically live so a colcon-built control node can
+  find them (a path argument, package share-data, or something else),
+  and which node actually does this — none of this is decided yet.
+- The general pattern a control node would need: build a
+  `DummyVecEnv`-wrapped stub matching the trained observation/action
+  space, `VecNormalize.load(path, venv)` with `venv.training = False`,
+  normalize each observation before calling `model.predict(...,
+  deterministic=True)`.
