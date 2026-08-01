@@ -46,9 +46,59 @@ for _ in range(20):
 
 assert obs[5] > 0.3, \
     f"hip_L should have swung forward briskly after 100ms at max torque, got {obs[5]}"
+actuated_hip_L_pos = obs[5]
+
+# --- termination: drive hard on one hip only until the biped actually falls,
+# and check the fall penalty/latch around the step that first trips it.
+# Measured empirically (see task report): max torque on hip_L alone with all
+# other joints slack reliably terminates by step 25 (pitch crosses
+# PITCH_LIMIT); 150 gives ~6x headroom above that so this isn't flaky.
+TERMINATION_STEP_BUDGET = 150
+scorer.reset()
+typical_reward = None
+terminated_step = None
+first_terminal_reward = None
+for i in range(TERMINATION_STEP_BUDGET):
+    obs, reward, terminated, truncated, _info = scorer.step(HIP_L_PUSH)
+    if typical_reward is None and not terminated:
+        # grab a representative in-episode, pre-fall reward to compare against
+        typical_reward = reward
+    if terminated:
+        terminated_step = i + 1
+        first_terminal_reward = reward
+        break
+
+assert terminated_step is not None, (
+    f"episode never terminated within {TERMINATION_STEP_BUDGET} steps of "
+    "sustained max one-sided hip_L torque - HEIGHT_DROP_LIMIT/PITCH_LIMIT "
+    "termination logic may be broken"
+)
+
+# FALL_PENALTY (5.0) is subtracted only on the step that first sets
+# terminated=True, so that step's reward should be sharply lower than a
+# typical non-terminal step from the same run. A margin of 3.0 is looser
+# than the full 5.0 penalty (control-cost/velocity terms shift reward
+# step-to-step too, so matching -5.0 exactly would be flaky) but still tight
+# enough that a missing/miswired penalty would fail this assertion.
+assert first_terminal_reward <= typical_reward - 3.0, (
+    f"reward on the terminating step ({first_terminal_reward:.4f}) is not "
+    f"low enough vs. a typical non-terminal step in this run "
+    f"({typical_reward:.4f}) - FALL_PENALTY may not be getting applied"
+)
+
+# --- latch: terminated must still read True on the very next step ---
+obs, reward, terminated, truncated, _info = scorer.step(ZERO_ACTION)
+assert terminated, (
+    "terminated flipped back to False on the step right after first tripping "
+    "- the latch in on_post_update should hold it True once set"
+)
+
 scorer.close()
 print(
     f"PASS: idle for {IDLE_STEPS} steps stayed upright "
     f"(torso_z_pos={idle_obs[1]:+.4f}, torso_pitch={idle_obs[3]:+.4f}); "
-    f"after 20 steps of hip_L torque, hip_L_pos={obs[5]:.3f}"
+    f"after 20 steps of hip_L torque, hip_L_pos={actuated_hip_L_pos:.3f}; "
+    f"terminated at step {terminated_step} with reward={first_terminal_reward:.4f} "
+    f"(typical non-terminal reward {typical_reward:.4f}), and latch held true "
+    "on the following step"
 )
