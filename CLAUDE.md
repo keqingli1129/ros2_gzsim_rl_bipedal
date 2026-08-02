@@ -232,6 +232,13 @@ All commands need `PYTHONPATH=/usr/lib/python3/dist-packages` and
 - **`verify_biped_scorer.py`** — scratch check: exercises `BipedScorer`
   directly — idle stability, actuated movement, and an explicit
   termination/fall-penalty/latch scenario.
+- **`infer.py`** — runs a trained policy (`biped_ppo.zip` +
+  `biped_vecnormalize.pkl`) against `biped.sdf` with a visible Gazebo GUI,
+  driving Gazebo as an external subprocess over `gz.transport13` topics
+  (`JointStatePublisher`/`ApplyJointForce`, added to `biped.sdf` for this
+  purpose) rather than reusing `BipedScorer`'s in-process `TestFixture`.
+  Loops forever, auto-resetting the world on every fall, until Ctrl+C. Run:
+  `uv run python infer.py`.
 
 ## Open: how a trained model gets used in a real ROS2 node (future work)
 

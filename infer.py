@@ -176,5 +176,157 @@ def _assemble_obs(positions, velocities):
         return None
 
 
+def run_inference(model, normalizer, effort_limits):
+    _kill_stale_gz_processes()
+
+    gz_server = None
+    gz_gui = None
+    try:
+        print("Launching Gazebo server...")
+        gz_server = subprocess.Popen(["gz", "sim", "-s", "-r", SDF_PATH])
+        time.sleep(3)
+        if gz_server.poll() is not None:
+            raise RuntimeError(
+                f"gz sim server exited immediately (code {gz_server.returncode}) "
+                "- check for a stale process still holding the SDF/transport "
+                "bus, or an SDF validation error"
+            )
+
+        print("Launching Gazebo GUI...")
+        gz_gui = subprocess.Popen(["gz", "sim", "-g"])
+        time.sleep(5)  # wait for GUI to connect
+
+        node = Node()
+        force_pubs = {
+            name: node.advertise(f"/model/{MODEL_NAME}/joint/{name}/cmd_force", Double)
+            for name in ACTUATED_JOINTS
+        }
+
+        latest = {"obs": None}
+
+        def on_joint_state(msg):
+            positions = {j.name: j.axis1.position for j in msg.joint}
+            velocities = {j.name: j.axis1.velocity for j in msg.joint}
+            obs = _assemble_obs(positions, velocities)
+            if obs is not None:
+                latest["obs"] = obs
+
+        joint_state_topic = f"/world/{WORLD_NAME}/model/{MODEL_NAME}/joint_state"
+        node.subscribe(Model, joint_state_topic, on_joint_state)
+
+        print("Waiting for first joint_state message...")
+        _wait_for_obs(latest)
+
+        def publish_zero_forces():
+            # ApplyJointForce has no Reset() and simply holds the last
+            # commanded force (same as cart-pole's single-joint case) - zero
+            # every actuated joint before resetting so nothing is still
+            # driving the robot post-reset.
+            for name in ACTUATED_JOINTS:
+                zero_msg = Double()
+                zero_msg.data = 0.0
+                force_pubs[name].publish(zero_msg)
+
+        print("Running inference with GUI... Press Ctrl+C to stop.")
+        episode_start = time.monotonic()
+        for _ in range(MAX_ITERATIONS):
+            loop_start = time.monotonic()
+
+            obs = latest["obs"]
+            normalized = normalizer.normalize_obs(obs.reshape(1, -1))
+            action, _state = model.predict(normalized, deterministic=True)
+            action = np.clip(action[0], -1.0, 1.0)
+
+            for i, name in enumerate(ACTUATED_JOINTS):
+                force_msg = Double()
+                force_msg.data = float(action[i]) * effort_limits[name]
+                force_pubs[name].publish(force_msg)
+
+            torso_z_pos, torso_pitch = float(obs[1]), float(obs[3])
+            if torso_z_pos < -HEIGHT_DROP_LIMIT or abs(torso_pitch) > PITCH_LIMIT:
+                episode_len = time.monotonic() - episode_start
+                print(f"Biped fell after {episode_len:.2f}s, resetting world...")
+                publish_zero_forces()
+                # Unsubscribe before requesting - cart-pole's run_inference.py
+                # found node.request() reliably deadlocks gz.transport13's
+                # Python binding while joint_state's own subscription
+                # callback is firing at physics-step rate.
+                reset_ok = None
+                for attempt in range(1, MAX_RESET_ATTEMPTS + 1):
+                    node.unsubscribe(joint_state_topic)
+                    reset_ok = _reset_world(node)
+                    latest["obs"] = None
+                    node.subscribe(Model, joint_state_topic, on_joint_state)
+                    _wait_for_obs(latest)
+                    torso_z_pos = float(latest["obs"][1])
+                    torso_pitch = float(latest["obs"][3])
+                    if torso_z_pos >= -HEIGHT_DROP_LIMIT and abs(torso_pitch) <= PITCH_LIMIT:
+                        if attempt > 1:
+                            print(f"  (reset took effect on attempt {attempt})")
+                        break
+                else:
+                    raise RuntimeError(
+                        f"world reset did not take effect after {MAX_RESET_ATTEMPTS} "
+                        f"attempts (last request ok={reset_ok}, post-reset "
+                        f"torso_z_pos={torso_z_pos:.4f} torso_pitch={torso_pitch:.4f})"
+                    )
+                episode_start = time.monotonic()
+
+            elapsed = time.monotonic() - loop_start
+            remaining = STEP_PERIOD - elapsed
+            if remaining > 0:
+                time.sleep(remaining)
+
+        print(f"Reached MAX_ITERATIONS ({MAX_ITERATIONS}) without interruption, stopping.")
+
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        # A second Ctrl+C landing mid-cleanup previously escaped past a bare
+        # proc.wait() in cart-pole's script, leaving the GUI process alive -
+        # retry across repeated interrupts and escalate to SIGKILL if a
+        # process doesn't respond to SIGTERM promptly.
+        for proc in (gz_gui, gz_server):
+            if proc is None:
+                continue
+            while True:
+                try:
+                    proc.terminate()
+                    break
+                except KeyboardInterrupt:
+                    continue
+        for proc in (gz_gui, gz_server):
+            if proc is None:
+                continue
+            killed = False
+            while True:
+                try:
+                    proc.wait(timeout=10)
+                    break
+                except subprocess.TimeoutExpired:
+                    if not killed:
+                        proc.kill()
+                        killed = True
+                except KeyboardInterrupt:
+                    continue
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", default=os.path.join(FILE_DIR, "biped_ppo"))
+    parser.add_argument("--vecnorm", default=os.path.join(FILE_DIR, "biped_vecnormalize.pkl"))
+    args = parser.parse_args()
+
+    effort_limits = _read_effort_limits(SDF_PATH)
+    print(f"Read actuated-joint effort limits from {SDF_PATH}: {effort_limits}")
+
+    model = PPO.load(args.model)
+    print(f"Loaded model from {args.model}.zip")
+    normalizer = _load_normalizer(args.vecnorm)
+    print(f"Loaded VecNormalize stats from {args.vecnorm}")
+
+    run_inference(model, normalizer, effort_limits)
+
+
 if __name__ == "__main__":
-    print("infer.py skeleton loaded OK")
+    main()
