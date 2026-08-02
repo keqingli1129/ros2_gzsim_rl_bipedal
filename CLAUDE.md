@@ -214,7 +214,14 @@ All commands need `PYTHONPATH=/usr/lib/python3/dist-packages` and
 
 - **`biped.sdf`** — static, hand-authored world + robot model (9 links,
   9 joints: 3 passive planar-mount + 4 actuated leg joints + 2 fixed
-  foot joints).
+  foot joints). Also declares a `JointStatePublisher` plugin and 4x
+  `ApplyJointForce` plugins (added for `infer.py`, below) that let an
+  external process read/write joint state over `gz.transport13` topics.
+  Those `ApplyJointForce` plugins write to the same per-joint
+  `JointForceCmd` component `BipedScorer.on_pre_update` writes to during
+  training — verified harmless (verified via `verify_biped_scorer.py`'s
+  actuated-movement assertion), but re-run that check after any future
+  edit to this file's plugin section.
 - **`biped_scorer.py`** — `BipedScorer`: the in-process Gazebo System
   that applies torques and reads joint state each step. Exports
   `HEIGHT_DROP_LIMIT`/`PITCH_LIMIT` (termination thresholds).
@@ -237,7 +244,8 @@ All commands need `PYTHONPATH=/usr/lib/python3/dist-packages` and
   driving Gazebo as an external subprocess over `gz.transport13` topics
   (`JointStatePublisher`/`ApplyJointForce`, added to `biped.sdf` for this
   purpose) rather than reusing `BipedScorer`'s in-process `TestFixture`.
-  Loops forever, auto-resetting the world on every fall, until Ctrl+C. Run:
+  Auto-resets the world on every fall; runs until Ctrl+C or a
+  `MAX_ITERATIONS` safety cap (~250s). Run:
   `uv run python infer.py`.
 
 ## Open: how a trained model gets used in a real ROS2 node (future work)

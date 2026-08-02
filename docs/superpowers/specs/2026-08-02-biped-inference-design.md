@@ -128,9 +128,10 @@ suggested, without any error.
 
 ## Reset behavior
 
-Loops forever, auto-resetting on every fall, until Ctrl+C — matching the
-cart-pole precedent (confirmed with the user). Reset reuses cart-pole's
-empirically-derived `reset.all` sequence unchanged in structure:
+Auto-resets on every fall, until Ctrl+C or the `MAX_ITERATIONS` cap
+described above — matching the cart-pole precedent (confirmed with the
+user). Reset reuses cart-pole's empirically-derived `reset.all` sequence
+unchanged in structure:
 
 - Issue `WorldControl` `reset.all` (not `reset.model_only` — confirmed
   against the cart-pole world to be the one that actually resets joint

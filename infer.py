@@ -35,6 +35,11 @@ WORLD_NAME = "biped"
 MODEL_NAME = "biped"
 # 5 x 1ms physics steps per action, matching both biped.sdf's max_step_size
 # (0.001) and BipedScorer.step's server.run(True, 5, False) cadence.
+# This paces the loop against wall-clock time, sleeping to fill out each
+# 5ms period, against biped.sdf's real_time_factor = 1.0 - unlike training,
+# which steps simulated time deterministically via server.run(...), so
+# under GUI/CPU load this is only an approximation of training's cadence,
+# not a guarantee of an identical one.
 STEP_PERIOD = 0.005
 MAX_ITERATIONS = 50000  # ~250s at STEP_PERIOD, same value cart-pole used
 MAX_RESET_ATTEMPTS = 5
@@ -258,6 +263,12 @@ def run_inference(model, normalizer, effort_limits):
                     latest["obs"] = None
                     node.subscribe(Model, joint_state_topic, on_joint_state)
                     _wait_for_obs(latest)
+                    # The first message after resubscribe can be a stale/in-flight
+                    # snapshot queued before the reset took effect - discard it and
+                    # wait for a second, genuinely fresh observation before judging
+                    # whether the reset actually worked.
+                    latest["obs"] = None
+                    _wait_for_obs(latest)
                     torso_z_pos = float(latest["obs"][1])
                     torso_pitch = float(latest["obs"][3])
                     if torso_z_pos >= -HEIGHT_DROP_LIMIT and abs(torso_pitch) <= PITCH_LIMIT:
@@ -320,10 +331,11 @@ def main():
     effort_limits = _read_effort_limits(SDF_PATH)
     print(f"Read actuated-joint effort limits from {SDF_PATH}: {effort_limits}")
 
-    model = PPO.load(args.model)
-    print(f"Loaded model from {args.model}.zip")
     normalizer = _load_normalizer(args.vecnorm)
     print(f"Loaded VecNormalize stats from {args.vecnorm}")
+    model = PPO.load(args.model)
+    model_display = args.model if args.model.endswith(".zip") else f"{args.model}.zip"
+    print(f"Loaded model from {model_display}")
 
     run_inference(model, normalizer, effort_limits)
 
