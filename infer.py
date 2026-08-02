@@ -154,5 +154,27 @@ def _wait_for_obs(latest, timeout=2.0):
     )
 
 
+def _assemble_obs(positions, velocities):
+    """Pure function: builds the 13-dim observation from position/velocity
+    dicts keyed by joint name, in BipedScorer.on_post_update's exact order.
+    Kept separate from the joint_state subscription callback so this
+    ordering-critical logic is testable without a live simulation. Returns
+    None if a joint is missing - a mid-reset snapshot can arrive with an
+    incomplete joint set, and the caller should just skip that message
+    (same as cart-pole's KeyError-skip in its own callback)."""
+    try:
+        return np.array([
+            velocities["torso_slide_x_joint"],
+            positions["torso_slide_z_joint"], velocities["torso_slide_z_joint"],
+            positions["torso_pitch_joint"], velocities["torso_pitch_joint"],
+            positions["hip_L_joint"], velocities["hip_L_joint"],
+            positions["knee_L_joint"], velocities["knee_L_joint"],
+            positions["hip_R_joint"], velocities["hip_R_joint"],
+            positions["knee_R_joint"], velocities["knee_R_joint"],
+        ], dtype=np.float32)
+    except KeyError:
+        return None
+
+
 if __name__ == "__main__":
     print("infer.py skeleton loaded OK")
