@@ -218,8 +218,10 @@ env = _ObsSpaceStub()
 assert env.action_space.shape == (4,)
 assert np.all(env.action_space.low == -1.0) and np.all(env.action_space.high == 1.0)
 assert env.observation_space.shape == (13,)
-assert env.observation_space.low[1] == -0.4 and env.observation_space.high[1] == float('inf')
-assert env.observation_space.low[3] == -0.6 and env.observation_space.high[3] == 0.6
+assert abs(float(env.observation_space.low[1]) - (-0.4)) < 1e-6
+assert env.observation_space.high[1] == float('inf')
+assert abs(float(env.observation_space.low[3]) - (-0.6)) < 1e-6
+assert abs(float(env.observation_space.high[3]) - 0.6) < 1e-6
 print('stub spaces OK')
 "`
 
