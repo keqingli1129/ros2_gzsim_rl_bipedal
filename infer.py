@@ -108,5 +108,51 @@ def _read_effort_limits(sdf_path):
     return limits
 
 
+def _kill_stale_gz_processes():
+    """Terminate any gz sim server/GUI left over from a prior run - ported
+    from cart-pole's run_inference.py, which found plain SIGTERM
+    unreliable against gz sim -g in this environment and needed to escalate
+    to SIGKILL. Scoped to this exact SDF path (not a bare "gz sim"
+    substring) so this can't kill an unrelated gz sim session on the same
+    machine."""
+    _pkill_and_escalate(f"gz sim -s -r {SDF_PATH}")
+    _pkill_and_escalate("gz sim -g")
+
+
+def _pkill_and_escalate(pattern):
+    subprocess.run(["pkill", "-f", pattern], check=False)
+    time.sleep(1)
+    still_alive = subprocess.run(
+        ["pgrep", "-f", pattern], capture_output=True, check=False)
+    if still_alive.returncode == 0:
+        subprocess.run(["pkill", "-9", "-f", pattern], check=False)
+        time.sleep(1)
+
+
+def _reset_world(node):
+    """Reset via reset.all - the same RPC cart-pole's run_inference.py used
+    after confirming reset.model_only was a no-op there. Does not raise on
+    ok=False: that flag was observed to read False even when the reset
+    physically took effect, so the caller checks the real postcondition
+    (the next joint_state observation) instead."""
+    request = WorldControl()
+    request.reset.all = True
+    ok, _resp = node.request(
+        f"/world/{WORLD_NAME}/control", request, WorldControl, Boolean, 5000)
+    return ok
+
+
+def _wait_for_obs(latest, timeout=2.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if latest["obs"] is not None:
+            return
+        time.sleep(0.01)
+    raise RuntimeError(
+        "no joint_state message received - is JointStatePublisher declared "
+        "in biped.sdf?"
+    )
+
+
 if __name__ == "__main__":
     print("infer.py skeleton loaded OK")
