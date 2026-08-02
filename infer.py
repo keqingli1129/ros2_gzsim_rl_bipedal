@@ -94,5 +94,19 @@ def _load_normalizer(vecnorm_path):
     return venv
 
 
+def _read_effort_limits(sdf_path):
+    root = ET.parse(sdf_path).getroot()
+    limits = {}
+    for name in ACTUATED_JOINTS:
+        effort_el = root.find(f".//joint[@name='{name}']/axis/limit/effort")
+        if effort_el is None:
+            raise RuntimeError(
+                f"could not find an effort limit for joint {name!r} in "
+                f"{sdf_path} - did biped.sdf's joint structure change?"
+            )
+        limits[name] = float(effort_el.text)
+    return limits
+
+
 if __name__ == "__main__":
     print("infer.py skeleton loaded OK")
