@@ -219,8 +219,8 @@ All commands need `PYTHONPATH=/usr/lib/python3/dist-packages` and
   external process read/write joint state over `gz.transport13` topics.
   Those `ApplyJointForce` plugins write to the same per-joint
   `JointForceCmd` component `BipedScorer.on_pre_update` writes to during
-  training — verified harmless (verified via `verify_biped_scorer.py`'s
-  actuated-movement assertion), but re-run that check after any future
+  training — verified harmless via `verify_biped_scorer.py`'s
+  actuated-movement assertion, but re-run that check after any future
   edit to this file's plugin section.
 - **`biped_scorer.py`** — `BipedScorer`: the in-process Gazebo System
   that applies torques and reads joint state each step. Exports
