@@ -70,7 +70,7 @@ def main():
     venv = DummyVecEnv([lambda: Monitor(TimeLimit(CustomBipedGzTrain(), max_episode_steps=1000))])
     venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
     model = PPO("MlpPolicy", venv, verbose=1, device="auto")
-    model.learn(total_timesteps=100_000)
+    model.learn(total_timesteps=1_000_000)
     model_path = os.path.join(FILE_DIR, "biped_ppo")
     model.save(model_path)
     vecnorm_path = os.path.join(FILE_DIR, "biped_vecnormalize.pkl")
