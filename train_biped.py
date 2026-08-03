@@ -75,7 +75,7 @@ def main():
     # before finding a real gait - see this repo's
     # docs/superpowers/specs/2026-08-02-entropy-coefficient-tuning-design.md.
     model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01)
-    model.learn(total_timesteps=1_000_000)
+    model.learn(total_timesteps=5_000_000)
     model_path = os.path.join(FILE_DIR, "biped_ppo")
     model.save(model_path)
     vecnorm_path = os.path.join(FILE_DIR, "biped_vecnormalize.pkl")
