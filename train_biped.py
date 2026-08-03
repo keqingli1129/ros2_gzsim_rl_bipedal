@@ -69,7 +69,12 @@ def main():
     # 1000 steps * 5ms/step = 5 simulated seconds per episode.
     venv = DummyVecEnv([lambda: Monitor(TimeLimit(CustomBipedGzTrain(), max_episode_steps=1000))])
     venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
-    model = PPO("MlpPolicy", venv, verbose=1, device="auto")
+    # ent_coef=0.01: the first 1M-timestep run's entropy_loss climbed
+    # steadily toward 0 (std shrank the whole run, nothing discouraging
+    # it), converging confidently on a ~1.2s-survival local optimum well
+    # before finding a real gait - see this repo's
+    # docs/superpowers/specs/2026-08-02-entropy-coefficient-tuning-design.md.
+    model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01)
     model.learn(total_timesteps=1_000_000)
     model_path = os.path.join(FILE_DIR, "biped_ppo")
     model.save(model_path)
