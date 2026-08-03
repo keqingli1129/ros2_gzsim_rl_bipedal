@@ -6,12 +6,37 @@ import gymnasium as gym
 import numpy as np
 from gymnasium.wrappers import TimeLimit
 from stable_baselines3 import PPO
+from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 
 from biped_scorer import BipedScorer, HEIGHT_DROP_LIMIT, PITCH_LIMIT
 
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
+TOTAL_TIMESTEPS = 5_000_000
+SEED = 42
+
+
+class EntCoefDecayCallback(BaseCallback):
+    """Linearly decays model.ent_coef from initial_value to 0 over
+    training. SB3 has no built-in schedule for ent_coef (only
+    learning_rate) - PPO.train() reads self.ent_coef fresh each update,
+    so overwriting it here works as a manual one. A constant ent_coef
+    held for a full 5M-timestep run (see this repo's
+    docs/superpowers/specs/2026-08-03-entropy-coefficient-decay-design.md)
+    kept action std at 0.899 even at the end, decoupling the deterministic
+    policy infer.py evaluates from what PPO's stochastic rollouts actually
+    optimized."""
+
+    def __init__(self, initial_value, total_timesteps):
+        super().__init__()
+        self.initial_value = initial_value
+        self.total_timesteps = total_timesteps
+
+    def _on_step(self):
+        progress = self.num_timesteps / self.total_timesteps
+        self.model.ent_coef = self.initial_value * max(0.0, 1.0 - progress)
+        return True
 
 
 class CustomBipedGzTrain(gym.Env):
@@ -69,13 +94,18 @@ def main():
     # 1000 steps * 5ms/step = 5 simulated seconds per episode.
     venv = DummyVecEnv([lambda: Monitor(TimeLimit(CustomBipedGzTrain(), max_episode_steps=1000))])
     venv = VecNormalize(venv, norm_obs=True, norm_reward=False, clip_obs=10.0)
-    # ent_coef=0.01: the first 1M-timestep run's entropy_loss climbed
-    # steadily toward 0 (std shrank the whole run, nothing discouraging
-    # it), converging confidently on a ~1.2s-survival local optimum well
-    # before finding a real gait - see this repo's
-    # docs/superpowers/specs/2026-08-02-entropy-coefficient-tuning-design.md.
-    model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01)
-    model.learn(total_timesteps=5_000_000)
+    # ent_coef=0.01 (decayed to 0 via EntCoefDecayCallback below): the
+    # first 1M-timestep run (ent_coef=0, no decay possible) converged
+    # confidently on a ~1.2s-survival local optimum well before finding a
+    # real gait. A later run holding ent_coef=0.01 constant for the full
+    # 5M timesteps overcorrected - std never came down, so infer.py's
+    # deterministic policy was worse than either prior run despite higher
+    # training-time reward. See this repo's
+    # docs/superpowers/specs/2026-08-02-entropy-coefficient-tuning-design.md
+    # and .../2026-08-03-entropy-coefficient-decay-design.md.
+    model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01, seed=SEED)
+    model.learn(total_timesteps=TOTAL_TIMESTEPS,
+                callback=EntCoefDecayCallback(0.01, TOTAL_TIMESTEPS))
     model_path = os.path.join(FILE_DIR, "biped_ppo")
     model.save(model_path)
     vecnorm_path = os.path.join(FILE_DIR, "biped_vecnormalize.pkl")
