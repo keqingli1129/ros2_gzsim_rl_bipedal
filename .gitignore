@@ -12,3 +12,4 @@ wheels/
 # train_biped.py output - not source, don't hand-edit or commit
 biped_ppo.zip
 biped_vecnormalize.pkl
+tb_logs/

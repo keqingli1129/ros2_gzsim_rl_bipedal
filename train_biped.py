@@ -13,7 +13,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from biped_scorer import BipedScorer, HEIGHT_DROP_LIMIT, PITCH_LIMIT
 
 FILE_DIR = os.path.dirname(os.path.realpath(__file__))
-TOTAL_TIMESTEPS = 5_000_000
+TOTAL_TIMESTEPS = 1_000_000
 SEED = 42
 
 
@@ -103,7 +103,8 @@ def main():
     # training-time reward. See this repo's
     # docs/superpowers/specs/2026-08-02-entropy-coefficient-tuning-design.md
     # and .../2026-08-03-entropy-coefficient-decay-design.md.
-    model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01, seed=SEED)
+    model = PPO("MlpPolicy", venv, verbose=1, device="auto", ent_coef=0.01, seed=SEED,
+                 tensorboard_log=os.path.join(FILE_DIR, "tb_logs"))
     model.learn(total_timesteps=TOTAL_TIMESTEPS,
                 callback=EntCoefDecayCallback(0.01, TOTAL_TIMESTEPS))
     model_path = os.path.join(FILE_DIR, "biped_ppo")
